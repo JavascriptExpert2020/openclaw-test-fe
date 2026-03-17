@@ -7,6 +7,18 @@ type ChatLog = {
   channel: string;
   text: string;
   ts: string;
+  model?: string;
+  provider?: string;
+};
+
+type SessionSummary = {
+  key: string;
+  title: string;
+  model?: string;
+  modelProvider?: string;
+  updatedAt?: number | null;
+  channel?: string;
+  kind?: string;
 };
 
 type Usage = {
@@ -27,6 +39,7 @@ const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:4000";
 const adminUser = process.env.NEXT_PUBLIC_ADMIN_USER ?? "admin";
 const adminPass = process.env.NEXT_PUBLIC_ADMIN_PASS ?? "openclaw";
 const authStorageKey = "openclaw-admin-auth";
+const sessionStorageKey = "openclaw-admin-session";
 
 const formatMoney = (value: number) =>
   new Intl.NumberFormat("en-US", {
@@ -35,14 +48,43 @@ const formatMoney = (value: number) =>
     maximumFractionDigits: 2,
   }).format(value);
 
+const formatModelLabel = (provider?: string, model?: string) => {
+  if (provider && model) {
+    return `${provider} / ${model}`;
+  }
+  return model || provider || "Unknown";
+};
+
+const resolveDefaultSessionKey = (
+  items: SessionSummary[],
+  stored?: string | null
+) => {
+  if (stored && items.some((item) => item.key === stored)) {
+    return stored;
+  }
+  const mainSession = items.find(
+    (item) =>
+      item.key === "main" ||
+      item.key.endsWith(":main") ||
+      item.key.includes(":main:")
+  );
+  if (mainSession) {
+    return mainSession.key;
+  }
+  return items[0]?.key ?? "main";
+};
+
 const tabs = ["Overview", "Chat History", "API Usage", "Skills"] as const;
 type TabKey = (typeof tabs)[number];
 
 export default function Home() {
   const [chatLogs, setChatLogs] = useState<ChatLog[]>([]);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [activeSessionKey, setActiveSessionKey] = useState<string>("");
   const [usage, setUsage] = useState<Usage[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
+  const [chatLoading, setChatLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busySkillId, setBusySkillId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("Overview");
@@ -64,6 +106,13 @@ export default function Home() {
     () => skills.filter((skill) => skill.enabled).length,
     [skills]
   );
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.key === activeSessionKey),
+    [sessions, activeSessionKey]
+  );
+  const sessionModelLabel = activeSession
+    ? formatModelLabel(activeSession.modelProvider, activeSession.model)
+    : "Unknown";
   const latestChat = chatLogs[0];
 
   useEffect(() => {
@@ -84,23 +133,32 @@ export default function Home() {
       setLoading(true);
       setError(null);
       try {
-        const [chatRes, usageRes, skillsRes] = await Promise.all([
-          fetch(`${apiBase}/api/chat-logs`),
+        const [sessionsRes, usageRes, skillsRes] = await Promise.all([
+          fetch(`${apiBase}/api/sessions`),
           fetch(`${apiBase}/api/usage`),
           fetch(`${apiBase}/api/skills`),
         ]);
 
-        if (!chatRes.ok || !usageRes.ok || !skillsRes.ok) {
+        if (!sessionsRes.ok || !usageRes.ok || !skillsRes.ok) {
           throw new Error("Backend returned an error.");
         }
 
-        const chatData = await chatRes.json();
+        const sessionsData = await sessionsRes.json();
         const usageData = await usageRes.json();
         const skillsData = await skillsRes.json();
 
-        setChatLogs(chatData.items ?? []);
+        const sessionItems = sessionsData.items ?? [];
+        setSessions(sessionItems);
         setUsage(usageData.items ?? []);
         setSkills(skillsData.items ?? []);
+
+        if (typeof window !== "undefined") {
+          const stored = window.localStorage.getItem(sessionStorageKey);
+          const defaultKey = resolveDefaultSessionKey(sessionItems, stored);
+          setActiveSessionKey(defaultKey);
+        } else {
+          setActiveSessionKey(resolveDefaultSessionKey(sessionItems, null));
+        }
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Unable to reach the backend."
@@ -112,6 +170,51 @@ export default function Home() {
 
     load();
   }, [isAuthed]);
+
+  useEffect(() => {
+    if (!isAuthed) {
+      return;
+    }
+    if (!activeSessionKey) {
+      setChatLogs([]);
+      return;
+    }
+    const loadChat = async () => {
+      setChatLoading(true);
+      setError(null);
+      try {
+        const chatRes = await fetch(
+          `${apiBase}/api/chat-logs?sessionKey=${encodeURIComponent(
+            activeSessionKey
+          )}`
+        );
+
+        if (!chatRes.ok) {
+          throw new Error("Backend returned an error.");
+        }
+
+        const chatData = await chatRes.json();
+        setChatLogs(chatData.items ?? []);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Unable to reach the backend."
+        );
+      } finally {
+        setChatLoading(false);
+      }
+    };
+
+    loadChat();
+  }, [isAuthed, activeSessionKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (activeSessionKey) {
+      window.localStorage.setItem(sessionStorageKey, activeSessionKey);
+    }
+  }, [activeSessionKey]);
 
   const handleLogin = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -350,7 +453,7 @@ export default function Home() {
                       Chat Entries
                     </p>
                     <p className="mt-2 text-2xl font-semibold text-[var(--ink)]">
-                      {loading ? "..." : chatLogs.length}
+                      {loading || chatLoading ? "..." : chatLogs.length}
                     </p>
                   </div>
                   <div className="rounded-2xl border border-black/10 bg-[var(--panel)] p-4">
@@ -371,7 +474,7 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="mt-5 rounded-2xl border border-black/10 bg-white p-4 text-sm text-[var(--muted)]">
-                  {latestChat ? (
+                  {latestChat && !chatLoading ? (
                     <>
                       <p className="text-xs uppercase tracking-[0.3em]">
                         Latest Message
@@ -384,6 +487,8 @@ export default function Home() {
                         {new Date(latestChat.ts).toLocaleString()}
                       </p>
                     </>
+                  ) : chatLoading ? (
+                    "Loading latest message..."
                   ) : (
                     "Waiting for the first inbound message."
                   )}
@@ -400,11 +505,40 @@ export default function Home() {
                 Chat History
               </h2>
               <span className="text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
-                {loading ? "Loading" : `${chatLogs.length} entries`}
+                {chatLoading ? "Loading" : `${chatLogs.length} entries`}
               </span>
             </div>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-3 rounded-full border border-black/10 bg-white px-4 py-2 text-sm">
+                <span className="text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
+                  Session
+                </span>
+                <select
+                  value={activeSessionKey}
+                  onChange={(event) => setActiveSessionKey(event.target.value)}
+                  disabled={sessions.length === 0}
+                  className="bg-transparent text-sm font-medium text-[var(--ink)] focus:outline-none"
+                >
+                  {sessions.length === 0 ? (
+                    <option value="">No sessions</option>
+                  ) : (
+                    sessions.map((session) => (
+                      <option key={session.key} value={session.key}>
+                        {session.title}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
+              <div className="rounded-full border border-black/10 bg-white px-4 py-2 text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
+                Model:{" "}
+                <span className="font-semibold text-[var(--ink)]">
+                  {sessionModelLabel}
+                </span>
+              </div>
+            </div>
             <div className="mt-6 space-y-4">
-              {loading ? (
+              {chatLoading ? (
                 <div className="rounded-2xl border border-dashed border-black/10 p-6 text-sm text-[var(--muted)]">
                   Pulling chat history from the backend...
                 </div>
@@ -414,18 +548,33 @@ export default function Home() {
                   will appear here.
                 </div>
               ) : (
-                chatLogs.map((log) => (
-                  <div
-                    key={log.id}
-                    className="rounded-2xl border border-black/10 bg-[var(--panel)] p-4"
-                  >
-                    <div className="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-[var(--muted)]">
-                      <span>{log.channel}</span>
-                      <span>{new Date(log.ts).toLocaleString()}</span>
+                chatLogs.map((log) => {
+                  const isAssistant =
+                    log.channel === "assistant" || log.channel === "model";
+                  const resolvedModel =
+                    log.model || log.provider
+                      ? formatModelLabel(log.provider, log.model)
+                      : sessionModelLabel;
+                  const modelLabel = isAssistant ? resolvedModel : "N/A";
+                  return (
+                    <div
+                      key={log.id}
+                      className="rounded-2xl border border-black/10 bg-[var(--panel)] p-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-[0.25em] text-[var(--muted)]">
+                        <span>{log.channel}</span>
+                        <span>{new Date(log.ts).toLocaleString()}</span>
+                      </div>
+                      <p className="mt-2 text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
+                        Model:{" "}
+                        <span className="font-semibold text-[var(--ink)] normal-case">
+                          {modelLabel}
+                        </span>
+                      </p>
+                      <p className="mt-3 text-sm text-[var(--ink)]">{log.text}</p>
                     </div>
-                    <p className="mt-3 text-sm text-[var(--ink)]">{log.text}</p>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </section>
