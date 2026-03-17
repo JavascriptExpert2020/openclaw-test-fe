@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 type ChatLog = {
   id: string;
@@ -24,6 +24,9 @@ type Skill = {
 };
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:4000";
+const adminUser = process.env.NEXT_PUBLIC_ADMIN_USER ?? "admin";
+const adminPass = process.env.NEXT_PUBLIC_ADMIN_PASS ?? "openclaw";
+const authStorageKey = "openclaw-admin-auth";
 
 const formatMoney = (value: number) =>
   new Intl.NumberFormat("en-US", {
@@ -43,6 +46,11 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [busySkillId, setBusySkillId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("Overview");
+  const [isAuthed, setIsAuthed] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [loginUser, setLoginUser] = useState("");
+  const [loginPass, setLoginPass] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   const totalTokens = useMemo(
     () => usage.reduce((sum, item) => sum + item.tokens, 0),
@@ -59,6 +67,19 @@ export default function Home() {
   const latestChat = chatLogs[0];
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const stored = window.localStorage.getItem(authStorageKey);
+    setIsAuthed(stored === "1");
+    setAuthChecked(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthed) {
+      setLoading(false);
+      return;
+    }
     const load = async () => {
       setLoading(true);
       setError(null);
@@ -90,7 +111,29 @@ export default function Home() {
     };
 
     load();
-  }, []);
+  }, [isAuthed]);
+
+  const handleLogin = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setLoginError(null);
+    const user = loginUser.trim();
+    const pass = loginPass;
+    if (user === adminUser && pass === adminPass) {
+      window.localStorage.setItem(authStorageKey, "1");
+      setIsAuthed(true);
+      setLoginUser("");
+      setLoginPass("");
+      return;
+    }
+    setLoginError("Invalid login. Check the test credentials.");
+  };
+
+  const handleLogout = () => {
+    window.localStorage.removeItem(authStorageKey);
+    setIsAuthed(false);
+    setLoginUser("");
+    setLoginPass("");
+  };
 
   const toggleSkill = async (skill: Skill) => {
     setBusySkillId(skill.id);
@@ -126,6 +169,78 @@ export default function Home() {
     }
   };
 
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen px-6 py-10 text-[15px] text-[var(--ink)]">
+        <div className="mx-auto w-full max-w-xl rounded-[28px] border border-black/10 bg-[var(--panel)] p-8 text-sm text-[var(--muted)] shadow-[0_20px_60px_-45px_rgba(0,0,0,0.35)]">
+          Checking session...
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthed) {
+    return (
+      <div className="min-h-screen px-6 py-10 text-[15px] text-[var(--ink)]">
+        <div className="mx-auto flex w-full max-w-xl flex-col gap-6">
+          <div className="rounded-[28px] border border-black/10 bg-[var(--panel)] p-8 shadow-[0_20px_60px_-45px_rgba(0,0,0,0.35)]">
+            <p className="text-sm uppercase tracking-[0.25em] text-[var(--muted)]">
+              OpenClaw Admin
+            </p>
+            <h1 className="mt-2 font-[var(--font-display)] text-3xl font-semibold text-[var(--ink)]">
+              Admin Login
+            </h1>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              Test login only. Replace with real auth when ready.
+            </p>
+            <form onSubmit={handleLogin} className="mt-6 space-y-4">
+              <div>
+                <label className="text-xs uppercase tracking-[0.25em] text-[var(--muted)]">
+                  Username
+                </label>
+                <input
+                  value={loginUser}
+                  onChange={(event) => setLoginUser(event.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm text-[var(--ink)] focus:border-[var(--accent)] focus:outline-none"
+                  placeholder="admin"
+                  autoComplete="username"
+                />
+              </div>
+              <div>
+                <label className="text-xs uppercase tracking-[0.25em] text-[var(--muted)]">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={loginPass}
+                  onChange={(event) => setLoginPass(event.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm text-[var(--ink)] focus:border-[var(--accent)] focus:outline-none"
+                  placeholder="openclaw"
+                  autoComplete="current-password"
+                />
+              </div>
+              {loginError ? (
+                <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+                  {loginError}
+                </div>
+              ) : null}
+              <button
+                type="submit"
+                className="w-full rounded-2xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_-15px_rgba(0,0,0,0.55)]"
+              >
+                Sign in
+              </button>
+            </form>
+            <p className="mt-5 text-xs text-[var(--muted)]">
+              Test credentials: admin / openclaw (override via
+              NEXT_PUBLIC_ADMIN_USER and NEXT_PUBLIC_ADMIN_PASS).
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen px-6 py-10 text-[15px] text-[var(--ink)]">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-10">
@@ -144,9 +259,19 @@ export default function Home() {
                 </h1>
               </div>
             </div>
-            <div className="rounded-full border border-black/10 bg-white px-4 py-2 text-sm text-[var(--muted)]">
-              Backend:{" "}
-              <span className="font-semibold text-[var(--ink)]">{apiBase}</span>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="rounded-full border border-black/10 bg-white px-4 py-2 text-sm text-[var(--muted)]">
+                Backend:{" "}
+                <span className="font-semibold text-[var(--ink)]">
+                  {apiBase}
+                </span>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="rounded-full border border-black/10 bg-white px-4 py-2 text-xs uppercase tracking-[0.25em] text-[var(--muted)] transition hover:border-black/20 hover:text-[var(--ink)]"
+              >
+                Log out
+              </button>
             </div>
           </div>
           <div className="flex flex-wrap gap-3">
