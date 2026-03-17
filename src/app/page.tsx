@@ -555,7 +555,10 @@ export default function Home() {
                     log.model || log.provider
                       ? formatModelLabel(log.provider, log.model)
                       : sessionModelLabel;
-                  const modelLabel = isAssistant ? resolvedModel : "N/A";
+                  const modelLabel = isAssistant
+                    ? resolvedModel
+                    : sessionModelLabel;
+                  const modelPrefix = isAssistant ? "Model" : "Session model";
                   return (
                     <div
                       key={log.id}
@@ -566,7 +569,7 @@ export default function Home() {
                         <span>{new Date(log.ts).toLocaleString()}</span>
                       </div>
                       <p className="mt-2 text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
-                        Model:{" "}
+                        {modelPrefix}:{" "}
                         <span className="font-semibold text-[var(--ink)] normal-case">
                           {modelLabel}
                         </span>
